@@ -94,6 +94,88 @@ exports.register = [
 		}
 	}];
 
+	exports.registerStudent = [
+		// Validate fields.
+		body("firstName").isLength({ min: 1 }).trim().withMessage("First name must be specified.")
+			.isAlphanumeric().withMessage("First name has non-alphanumeric characters."),
+		body("lastName").isLength({ min: 1 }).trim().withMessage("Last name must be specified.")
+			.isAlphanumeric().withMessage("Last name has non-alphanumeric characters."),
+		body("email").isLength({ min: 1 }).trim().withMessage("Email must be specified.")
+			.isEmail().withMessage("Email must be a valid email address.").custom((value) => {
+				return UserModel.findOne({email : value}).then((user) => {
+					if (user) {
+						return Promise.reject("E-mail already in use");
+					}
+				});
+			}),
+		body("password").isLength({ min: 6 }).trim().withMessage("Password must be 6 characters or greater."),
+		body("sliitId").isLength({ min: 10 }).trim().withMessage("SLIIT ID must be 10 characters long."),
+		body("contact").isLength({ min: 6 }).trim().withMessage("Contact number must be 10 characters long"),
+		body("username").isLength({ min: 6 }).trim().withMessage("Password must be 6 characters or greater."),
+		
+
+		// Sanitize fields.
+		sanitizeBody("firstName").escape(),
+		sanitizeBody("lastName").escape(),
+		sanitizeBody("email").escape(),
+		sanitizeBody("password").escape(),
+		// Process request after validation and sanitization.
+		(req, res) => {
+			try {
+				// Extract the validation errors from a request.
+				const errors = validationResult(req);
+				if (!errors.isEmpty()) {
+					// Display sanitized values/errors messages.
+					return apiResponse.validationErrorWithData(res, "Validation Error.", errors.array());
+				}else {
+					//hash input password
+					bcrypt.hash(req.body.password,10,function(err, hash) {
+						// generate OTP for confirmation
+						let otp = utility.randomNumber(4);
+						// Create User object with escaped and trimmed data
+						var user = new UserModel(
+							{
+								firstName: req.body.firstName,
+								lastName: req.body.lastName,
+								email: req.body.email,
+								password: hash,
+								confirmOTP: otp
+							}
+						);
+						// Html email body
+						let html = "<p>Please Confirm your Account.</p><p>OTP: "+otp+"</p>";
+						// Send confirmation email
+						mailer.send(
+							constants.confirmEmails.from, 
+							req.body.email,
+							"Confirm Account",
+							html
+						).then(function(){
+							// Save user.
+							user.save(function (err) {
+								if (err) { return apiResponse.ErrorResponse(res, err); }
+								let userData = {
+									_id: user._id,
+									firstName: user.firstName,
+									lastName: user.lastName,
+									email: user.email
+								};
+								return apiResponse.successResponseWithData(res,"Registration Success.", userData);
+							});
+						}).catch(err => {
+							console.log(err);
+							return apiResponse.ErrorResponse(res,err);
+						}) ;
+					});
+				}
+			} catch (err) {
+				//throw error in json response with status 500.
+				return apiResponse.ErrorResponse(res, err);
+			}
+		}];
+
+
+
 /**
  * User login.
  *
@@ -157,6 +239,49 @@ exports.login = [
 			return apiResponse.ErrorResponse(res, err);
 		}
 	}];
+
+	exports.changePassword = [
+		body("email").isLength({ min: 1 }).trim().withMessage("Email must be specified.")
+		.isEmail().withMessage("Email must be a valid email address."),
+		body("password").isLength({ min: 1 }).trim().withMessage("Password must be specified."),
+		body("newPassword").isLength({ min: 1 }).trim().withMessage("New Password must be specified."),
+		sanitizeBody("password").escape(),
+		sanitizeBody("newPassword").escape(),
+		(req, res) => {
+			try {
+				const errors = validationResult(req);
+				if (!errors.isEmpty()) {
+					return apiResponse.validationErrorWithData(res, "Validation Error.", errors.array());
+				}else {
+					UserModel.findOne({email : req.body.email}).then(user => {
+						if (user) {
+							//Compare given password with db's hash.
+							bcrypt.compare(req.body.password,user.password,function (err,same) {
+								if(same){
+									//Check account confirmation.
+									if(user.isConfirmed){
+										bcrypt.hash(req.body.newPassword,10,function(err, hash) {
+											user.password = hash;
+											user.save();
+											return apiResponse.successResponseWithData(res,"Password change successful.", user);
+										});
+										
+									}else{
+										return apiResponse.unauthorizedResponse(res, "Account is not confirmed. Please confirm your account.");
+									}
+								}else{
+									return apiResponse.unauthorizedResponse(res, "Email or Password wrong.");
+								}
+							});
+						}else{
+							return apiResponse.unauthorizedResponse(res, "Email or Password wrong.");
+						}
+					});
+				}
+			} catch (err) {
+				return apiResponse.ErrorResponse(res, err);
+			}
+		}];
 
 /**
  * Verify Confirm otp.
